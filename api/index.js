@@ -6,9 +6,11 @@ const app = express();
 app.use(express.json({ limit: '10mb' })); 
 app.use(cors()); 
 
-const hierarchy = ["STRAIGHT FLUSH","QUADS","FULL HOUSE","FLUSH","STRAIGHT","3 OF A KIND","TWO PAIR","OVERPAIR","TOP PAIR","TOP PAIR BAD K","MIDDLE PAIR","WEAK PAIR","FLUSH DRAW","OESD","GUTSHOT","ACE HIGH (kicker 9+)","ACE HIGH (kicker <9)","OVERCARDS","BACK DOOR FD","BACK DOOR SD","AIR / NOTHING"];
+// Jerarquía por defecto (fallback por si el frontend no la envía)
+const defaultHierarchy = ["STRAIGHT FLUSH","QUADS","FULL HOUSE","FLUSH","STRAIGHT","3 OF A KIND","TWO PAIR","OVERPAIR","TOP PAIR","TOP PAIR BAD K","MIDDLE PAIR","WEAK PAIR","FLUSH DRAW","OESD","GUTSHOT","ACE HIGH (kicker 9+)","ACE HIGH (kicker <9)","OVERCARDS","BACK DOOR FD","BACK DOOR SD","AIR / NOTHING"];
 
-function getBestCategory(h, b) {
+// Motor de evaluación, ahora recibe la jerarquía personalizada como tercer parámetro
+function getBestCategory(h, b, customHierarchy) {
     if (!b.length) return "AIR / NOTHING";
     const hv=h.map(c=>c.v).sort((a,b)=>b-a), bv=b.map(c=>c.v).sort((a,b)=>b-a), all=[...h,...b];
     const vc={}, sc={}, bvc={}, bsc={}; 
@@ -66,21 +68,35 @@ function getBestCategory(h, b) {
         "AIR / NOTHING": () => true
     };
 
-    for(let cat of hierarchy) if(tests[cat] && tests[cat]()) return cat;
+    // Evalúa en el orden dictado por el cliente
+    const evalOrder = customHierarchy || defaultHierarchy;
+    
+    for(let cat of evalOrder) {
+        if(tests[cat] && tests[cat]()) return cat;
+    }
     return "AIR / NOTHING";
 }
 
 app.post('/api/analyze', ClerkExpressRequireAuth(), (req, res) => {
-    const { playerCombos, board } = req.body;
+    // Extraemos hierarchy del body
+    const { playerCombos, board, hierarchy } = req.body; 
+    const currentHierarchy = hierarchy || defaultHierarchy;
+
     let stats = { j1:{c:{}, t:0}, j2:{c:{}, t:0} };
-    hierarchy.forEach(h => { stats.j1.c[h]=0; stats.j2.c[h]=0; });
+    
+    // Inicializamos el contador de estadísticas basándonos en la jerarquía actual
+    currentHierarchy.forEach(h => { stats.j1.c[h]=0; stats.j2.c[h]=0; });
 
     ['j1','j2'].forEach(p => {
         for(let id in playerCombos[p]) {
             playerCombos[p][id].forEach(combo => {
                 if(!combo.some(hc=>board.some(bc=>bc.v===hc.v && bc.s===hc.s))) {
-                    const cat = getBestCategory(combo, board);
-                    stats[p].c[cat]++; stats[p].t++;
+                    // Pasamos currentHierarchy al motor
+                    const cat = getBestCategory(combo, board, currentHierarchy);
+                    if(stats[p].c[cat] !== undefined) {
+                        stats[p].c[cat]++; 
+                    }
+                    stats[p].t++;
                 }
             });
         }
@@ -89,13 +105,17 @@ app.post('/api/analyze', ClerkExpressRequireAuth(), (req, res) => {
 });
 
 app.post('/api/filter', ClerkExpressRequireAuth(), (req, res) => {
-    const { playerCombos, board, f1, f2 } = req.body;
+    // Extraemos hierarchy del body
+    const { playerCombos, board, f1, f2, hierarchy } = req.body;
+    const currentHierarchy = hierarchy || defaultHierarchy;
+    
     let filteredCombos = JSON.parse(JSON.stringify(playerCombos));
 
     const pr = (p, f) => { 
         if(!f.length) return; 
         for(let id in filteredCombos[p]){ 
-            filteredCombos[p][id] = filteredCombos[p][id].filter(c => f.includes(getBestCategory(c, board))); 
+            // Pasamos currentHierarchy al motor para el filtrado exacto
+            filteredCombos[p][id] = filteredCombos[p][id].filter(c => f.includes(getBestCategory(c, board, currentHierarchy))); 
             if(!filteredCombos[p][id].length) delete filteredCombos[p][id]; 
         }
     };
@@ -105,7 +125,7 @@ app.post('/api/filter', ClerkExpressRequireAuth(), (req, res) => {
     res.json(filteredCombos);
 });
 
-// Manejo de errores si alguien intenta entrar sin sesión
+// Manejo de errores de Clerk
 app.use((err, req, res, next) => {
     if (err.message === 'Unauthenticated') {
         return res.status(401).json({ error: 'Acceso denegado. Inicia sesión.' });
