@@ -1,9 +1,9 @@
 const express = require('express');
 const cors = require('cors');
+const { ClerkExpressRequireAuth } = require('@clerk/clerk-sdk-node');
 
 const app = express();
 app.use(express.json({ limit: '10mb' })); 
-// Vercel maneja los dominios, pero permitimos CORS para que tu frontend actual se comunique
 app.use(cors()); 
 
 const hierarchy = ["STRAIGHT FLUSH","QUADS","FULL HOUSE","FLUSH","STRAIGHT","3 OF A KIND","TWO PAIR","OVERPAIR","TOP PAIR","TOP PAIR BAD K","MIDDLE PAIR","WEAK PAIR","FLUSH DRAW","OESD","GUTSHOT","ACE HIGH (kicker 9+)","ACE HIGH (kicker <9)","OVERCARDS","BACK DOOR FD","BACK DOOR SD","AIR / NOTHING"];
@@ -70,7 +70,7 @@ function getBestCategory(h, b) {
     return "AIR / NOTHING";
 }
 
-app.post('/api/analyze', (req, res) => {
+app.post('/api/analyze', ClerkExpressRequireAuth(), (req, res) => {
     const { playerCombos, board } = req.body;
     let stats = { j1:{c:{}, t:0}, j2:{c:{}, t:0} };
     hierarchy.forEach(h => { stats.j1.c[h]=0; stats.j2.c[h]=0; });
@@ -88,7 +88,7 @@ app.post('/api/analyze', (req, res) => {
     res.json(stats);
 });
 
-app.post('/api/filter', (req, res) => {
+app.post('/api/filter', ClerkExpressRequireAuth(), (req, res) => {
     const { playerCombos, board, f1, f2 } = req.body;
     let filteredCombos = JSON.parse(JSON.stringify(playerCombos));
 
@@ -103,6 +103,14 @@ app.post('/api/filter', (req, res) => {
     pr('j1', f1); 
     pr('j2', f2);
     res.json(filteredCombos);
+});
+
+// Manejo de errores si alguien intenta entrar sin sesión
+app.use((err, req, res, next) => {
+    if (err.message === 'Unauthenticated') {
+        return res.status(401).json({ error: 'Acceso denegado. Inicia sesión.' });
+    }
+    next(err);
 });
 
 module.exports = app;
